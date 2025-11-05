@@ -1,0 +1,181 @@
+{
+  "users": {
+    "thekilogram": {
+      "createdAt": 1762309275901
+    },
+    "test1": {
+      "createdAt": 1762309591978
+    },
+    "devon": {
+      "createdAt": 1762310649062,
+      "weightLbs": 150
+    }
+  },
+  "entries": [
+    {
+      "user": "thekilogram",
+      "count": 10,
+      "timestamp": 1762309279507
+    },
+    {
+      "user": "thekilogram",
+      "count": 10,
+      "timestamp": 1762309304558
+    },
+    {
+      "user": "test1",
+      "count": 30,
+      "timestamp": 1762310138067
+    },
+    {
+      "user": "test1",
+      "count": 30,
+      "timestamp": 1762310138249
+    },
+    {
+      "user": "thekilogram",
+      "count": 40,
+      "timestamp": 1762310605690
+    },
+    {
+      "user": "thekilogram",
+      "count": 30,
+      "timestamp": 1762310606578
+    },
+    {
+      "user": "thekilogram",
+      "count": 15,
+      "timestamp": 1762310607351
+    },
+    {
+      "user": "thekilogram",
+      "count": 10,
+      "timestamp": 1762310608058
+    },
+    {
+      "user": "thekilogram",
+      "count": 40,
+      "timestamp": 1762310608697
+    },
+    {
+      "user": "thekilogram",
+      "count": 50,
+      "timestamp": 1762310609046
+    },
+    {
+      "user": "thekilogram",
+      "count": 30,
+      "timestamp": 1762310609413
+    },
+    {
+      "user": "thekilogram",
+      "count": 15,
+      "timestamp": 1762310609726
+    },
+    {
+      "user": "thekilogram",
+      "count": 5,
+      "timestamp": 1762310610171
+    },
+    {
+      "user": "thekilogram",
+      "count": 1,
+      "timestamp": 1762310610497
+    },
+    {
+      "user": "thekilogram",
+      "count": 50,
+      "timestamp": 1762310610935
+    },
+    {
+      "user": "thekilogram",
+      "count": 40,
+      "timestamp": 1762310611519
+    },
+    {
+      "user": "thekilogram",
+      "count": 30,
+      "timestamp": 1762310611881
+    },
+    {
+      "user": "thekilogram",
+      "count": 15,
+      "timestamp": 1762310612270
+    },
+    {
+      "user": "thekilogram",
+      "count": 5,
+      "timestamp": 1762310612659
+    },
+    {
+      "user": "thekilogram",
+      "count": 15,
+      "timestamp": 1762310612923
+    },
+    {
+      "user": "thekilogram",
+      "count": 20,
+      "timestamp": 1762310613111
+    },
+    {
+      "user": "thekilogram",
+      "count": 30,
+      "timestamp": 1762310613300
+    },
+    {
+      "user": "thekilogram",
+      "count": 40,
+      "timestamp": 1762310613494
+    },
+    {
+      "user": "thekilogram",
+      "count": 50,
+      "timestamp": 1762310613681
+    },
+    {
+      "user": "thekilogram",
+      "count": 1,
+      "timestamp": 1762310614230
+    },
+    {
+      "user": "thekilogram",
+      "count": 1,
+      "timestamp": 1762310614397
+    },
+    {
+      "user": "thekilogram",
+      "count": 10,
+      "timestamp": 1762310614571
+    },
+    {
+      "user": "thekilogram",
+      "count": 15,
+      "timestamp": 1762310614744
+    },
+    {
+      "user": "thekilogram",
+      "count": 15,
+      "timestamp": 1762310615933
+    },
+    {
+      "user": "thekilogram",
+      "count": 50,
+      "timestamp": 1762310616267
+    },
+    {
+      "user": "thekilogram",
+      "count": 50,
+      "timestamp": 1762310616440
+    },
+    {
+      "user": "thekilogram",
+      "count": 345345,
+      "timestamp": 1762310620097
+    },
+    {
+      "user": "devon",
+      "count": 10,
+      "timestamp": 1762311398951
+    }
+  ]
+}

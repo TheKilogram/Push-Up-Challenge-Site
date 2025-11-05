@@ -1,0 +1,19 @@
+{
+  "name": "pushup-challenge-site",
+  "version": "1.0.0",
+  "description": "Simple push-up challenge tracker for friends",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "pushups",
+    "challenge",
+    "express",
+    "leaderboard"
+  ],
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {}
+}

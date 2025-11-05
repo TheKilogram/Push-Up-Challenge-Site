@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Push-up Challenge</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Push-up Challenge</h1>
+
+      <!-- Login View -->
+      <div id="loginView" class="view">
+        <section class="user-section">
+          <h2>Enter Username</h2>
+          <div class="user-form">
+            <input id="username" type="text" placeholder="Enter a username" />
+            <input id="weightLbs" type="number" min="50" max="500" placeholder="Weight (lbs)" style="max-width:140px" />
+            <button id="useUser">Continue</button>
+          </div>
+          <p class="muted">Your name is just a label — no password.</p>
+        </section>
+      </div>
+
+      <!-- App View -->
+      <div id="appView" class="view hidden">
+        <div class="topbar">
+          <div class="grow"></div>
+          <div class="user-info">
+            <span id="appCurrentUser" class="current-user"></span>
+            <button id="logoutBtn" class="outline">Log out</button>
+          </div>
+        </div>
+
+        <section class="log-section">
+          <h2>Add Push-ups</h2>
+          <div class="log-controls">
+            <div id="quickBtns"></div>
+            <input id="customCount" type="number" min="1" placeholder="Custom" />
+            <button id="addCustom">Add</button>
+            <button id="undoBtn" class="outline" title="Undo your last log">Undo</button>
+          </div>
+          <div class="totals">
+            <div>Today: <span id="myToday">0</span></div>
+            <div>All-time: <span id="myAllTime">0</span></div>
+            <div>Calories today: <span id="myCalsToday">0</span></div>
+            <div>Calories all-time: <span id="myCalsAll">0</span></div>
+          </div>
+        </section>
+
+        <section class="board-section">
+          <h2>Today's Leaderboard</h2>
+          <table id="leaderboard">
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Today</th>
+                <th>All-time</th>
+                <th>Calories Today</th>
+                <th>Calories All-time</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <section class="chart-section">
+          <div class="chart-header">
+            <h2>History — <span id="chartUser">(choose a user)</span></h2>
+            <div class="chart-controls">
+              <label for="chartMode" class="muted">View:</label>
+              <select id="chartMode">
+                <option value="hour">By hour (12h)</option>
+                <option value="day" selected>By day (7d)</option>
+                <option value="month">By month (12m)</option>
+              </select>
+            </div>
+          </div>
+          <canvas id="historyChart" height="120"></canvas>
+        </section>
+
+        <footer>
+          <small>Tip: click a user in the leaderboard to view history.</small>
+        </footer>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+  </html>
