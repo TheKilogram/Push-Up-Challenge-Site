@@ -14,13 +14,30 @@
       <!-- Login View -->
       <div id="loginView" class="view">
         <section class="user-section">
-          <h2>Enter Username</h2>
-          <div class="user-form">
-            <input id="username" type="text" placeholder="Enter a username" />
-            <input id="weightLbs" type="number" min="50" max="500" placeholder="Weight (lbs)" style="max-width:140px" />
-            <button id="useUser">Continue</button>
+          <div class="auth-tabs">
+            <button id="tabLogin" class="auth-tab active" type="button" data-tab="login">Log in</button>
+            <button id="tabCreate" class="auth-tab" type="button" data-tab="create">Create account</button>
           </div>
-          <p class="muted">Your name is just a label — no password.</p>
+
+          <div id="loginPane" class="auth-pane">
+            <h2>Log in</h2>
+            <div class="user-form login-form">
+              <input id="loginUsername" type="text" placeholder="Enter your username" autocomplete="username" />
+              <button id="loginSubmit" type="button">Continue</button>
+            </div>
+            <div id="loginMessage" class="form-message" role="status" aria-live="polite"></div>
+          </div>
+
+          <div id="createPane" class="auth-pane hidden">
+            <h2>Create account</h2>
+            <div class="user-form create-form">
+              <input id="newUsername" type="text" placeholder="Choose a username" autocomplete="off" />
+              <input id="newWeightLbs" type="number" min="50" max="500" placeholder="Weight (lbs)" />
+              <button id="createAccount" type="button">Create</button>
+            </div>
+            <div id="createMessage" class="form-message" role="status" aria-live="polite"></div>
+            <p class="muted">Pick something unique; we use weight to estimate calories.</p>
+          </div>
         </section>
       </div>
 
@@ -37,10 +54,14 @@
         <section class="log-section">
           <h2>Add Push-ups</h2>
           <div class="log-controls">
-            <div id="quickBtns"></div>
-            <input id="customCount" type="number" min="1" placeholder="Custom" />
-            <button id="addCustom">Add</button>
-            <button id="undoBtn" class="outline" title="Undo your last log">Undo</button>
+            <div class="quick-row">
+              <div id="quickBtns"></div>
+              <button id="undoBtn" class="outline" title="Undo your last log">Undo</button>
+            </div>
+            <div class="custom-row">
+              <input id="customCount" type="number" min="1" placeholder="Custom" />
+              <button id="addCustom">Add</button>
+            </div>
           </div>
           <div class="totals">
             <div>Today: <span id="myToday">0</span></div>

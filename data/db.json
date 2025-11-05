@@ -4,10 +4,15 @@
       "createdAt": 1762309275901
     },
     "test1": {
-      "createdAt": 1762309591978
+      "createdAt": 1762309591978,
+      "weightLbs": 150
     },
     "devon": {
       "createdAt": 1762310649062,
+      "weightLbs": 150
+    },
+    "test2": {
+      "createdAt": 1762364716299,
       "weightLbs": 150
     }
   },
@@ -176,6 +181,16 @@
       "user": "devon",
       "count": 10,
       "timestamp": 1762311398951
+    },
+    {
+      "user": "test1",
+      "count": 10,
+      "timestamp": 1762348680868
+    },
+    {
+      "user": "test2",
+      "count": 10,
+      "timestamp": 1762364724540
     }
   ]
 }

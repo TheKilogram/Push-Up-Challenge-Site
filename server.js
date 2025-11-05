@@ -192,15 +192,33 @@ async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
   try {
+    if (req.method === 'GET' && pathname === '/api/users') {
+      const username = String(url.searchParams.get('username') || '').trim().toLowerCase();
+      if (!username) { res.writeHead(400); res.end(JSON.stringify({ error: 'username required' })); return; }
+      const db = await loadDb();
+      const user = db.users[username] || null;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ exists: !!user, user: user ? { username, weightLbs: user.weightLbs ?? null, createdAt: user.createdAt ?? null } : null }));
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/users') {
       const body = await parseJsonBody(req);
       const username = String(body.username || '').trim().toLowerCase();
       const weightLbsRaw = body.weightLbs ?? body.weight ?? null;
       const weightLbsVal = weightLbsRaw !== null ? Number(weightLbsRaw) : null;
+      const createOnly = Boolean(body.createOnly);
       if (!username) { res.writeHead(400); res.end(JSON.stringify({ error: 'username required' })); return; }
       const db = await loadDb();
       if (!db.users[username]) {
         db.users[username] = { createdAt: Date.now() };
+      } else if (createOnly) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'username already exists' }));
+        return;
+      }
+      if (!db.users[username].createdAt) {
+        db.users[username].createdAt = Date.now();
       }
       if (weightLbsVal && Number.isFinite(weightLbsVal) && weightLbsVal > 0) {
         db.users[username].weightLbs = Math.round(weightLbsVal);

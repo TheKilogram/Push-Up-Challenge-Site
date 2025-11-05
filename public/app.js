@@ -3,10 +3,18 @@ const els = {
   loginView: document.getElementById('loginView'),
   appView: document.getElementById('appView'),
 
-  // Login
-  username: document.getElementById('username'),
-  useUser: document.getElementById('useUser'),
-  weightLbs: document.getElementById('weightLbs'),
+  // Auth
+  loginTab: document.getElementById('tabLogin'),
+  createTab: document.getElementById('tabCreate'),
+  loginPane: document.getElementById('loginPane'),
+  createPane: document.getElementById('createPane'),
+  loginUsername: document.getElementById('loginUsername'),
+  loginSubmit: document.getElementById('loginSubmit'),
+  loginMessage: document.getElementById('loginMessage'),
+  createUsername: document.getElementById('newUsername'),
+  createWeight: document.getElementById('newWeightLbs'),
+  createSubmit: document.getElementById('createAccount'),
+  createMessage: document.getElementById('createMessage'),
 
   // App UI
   appCurrentUser: document.getElementById('appCurrentUser'),
@@ -27,24 +35,146 @@ const els = {
 
 let state = {
   user: '',
+  weightLbs: null,
   chart: null,
+  activeAuthTab: 'login',
 };
 
-function setUser(u){
-  state.user = u.trim().toLowerCase();
-  if (state.user) localStorage.setItem('pushups.username', state.user);
+function setUser(u, weightLbs){
+  const normalized = (u || '').trim().toLowerCase();
+  const previousUser = state.user;
+  const isSameUser = previousUser && normalized === previousUser;
+  state.user = normalized;
+  if (typeof weightLbs === 'number' && Number.isFinite(weightLbs) && weightLbs > 0) {
+    state.weightLbs = Math.round(weightLbs);
+    localStorage.setItem('pushups.weightLbs', String(state.weightLbs));
+    if (state.user) {
+      localStorage.setItem(`pushups.weightLbs.${state.user}`, String(state.weightLbs));
+    }
+  } else if (!isSameUser) {
+    state.weightLbs = null;
+  }
+  if (state.user) {
+    localStorage.setItem('pushups.username', state.user);
+  } else {
+    localStorage.removeItem('pushups.username');
+  }
   els.appCurrentUser.textContent = state.user ? `Using: ${state.user}` : '';
-  els.username.value = state.user || '';
+  if (els.loginUsername) els.loginUsername.value = state.user || '';
+  if (els.createUsername) els.createUsername.value = state.user || '';
   updateMyTotals();
   updateChartUser(state.user);
 }
 
+function showMessage(el, message, isError = false){
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('error', Boolean(isError && message));
+}
+
+function clearAuthMessages(){
+  showMessage(els.loginMessage, '');
+  showMessage(els.createMessage, '');
+}
+
+function showAuthTab(tab){
+  state.activeAuthTab = tab === 'create' ? 'create' : 'login';
+  const isLogin = state.activeAuthTab === 'login';
+  if (els.loginPane) els.loginPane.classList.toggle('hidden', !isLogin);
+  if (els.createPane) els.createPane.classList.toggle('hidden', isLogin);
+  if (els.loginTab) els.loginTab.classList.toggle('active', isLogin);
+  if (els.createTab) els.createTab.classList.toggle('active', !isLogin);
+  const target = isLogin ? els.loginUsername : els.createUsername;
+  if (target) target.focus();
+}
+
+async function attemptLogin(){
+  if (!els.loginUsername) return;
+  const usernameInput = els.loginUsername.value.trim();
+  showMessage(els.loginMessage, '');
+  showMessage(els.createMessage, '');
+  if (!usernameInput) {
+    showMessage(els.loginMessage, 'Enter a username to continue.', true);
+    return;
+  }
+  try {
+    const res = await fetch(`/api/users?username=${encodeURIComponent(usernameInput)}`);
+    if (!res.ok) throw new Error(`Failed to look up user (${res.status})`);
+    const data = await res.json();
+    if (data.exists) {
+      const weight = data.user && data.user.weightLbs != null ? Number(data.user.weightLbs) : undefined;
+      await proceedToApp(usernameInput, weight);
+      showMessage(els.loginMessage, '');
+      showMessage(els.createMessage, '');
+      return;
+    }
+    showMessage(els.loginMessage, 'No account found. Create one below.', true);
+    showAuthTab('create');
+    if (els.createUsername && !els.createUsername.value) {
+      els.createUsername.value = usernameInput;
+    }
+    if (els.createWeight) {
+      els.createWeight.focus();
+    }
+    showMessage(els.createMessage, 'Looks like that username is free. Add your weight to finish creating it.', false);
+  } catch (err) {
+    console.error(err);
+    showMessage(els.loginMessage, 'Could not verify that username. Please try again.', true);
+  }
+}
+
+async function attemptCreate(){
+  if (!els.createUsername) return;
+  const usernameRaw = els.createUsername.value.trim();
+  const weightNumeric = Number(els.createWeight?.value || '');
+  showMessage(els.createMessage, '');
+  if (!usernameRaw) {
+    showMessage(els.createMessage, 'Choose a username to continue.', true);
+    return;
+  }
+  if (!Number.isFinite(weightNumeric) || weightNumeric <= 0) {
+    showMessage(els.createMessage, 'Enter your weight (lbs) to personalize calorie estimates.', true);
+    return;
+  }
+  const username = usernameRaw.toLowerCase();
+  const weightToSave = Math.round(weightNumeric);
+  try {
+    const res = await fetch('/api/users', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ username, weightLbs: weightToSave, createOnly: true })
+    });
+    if (res.status === 409) {
+      showMessage(els.createMessage, 'That username is already taken. Try another.', true);
+      return;
+    }
+    if (!res.ok) throw new Error(`Failed to create user (${res.status})`);
+    const data = await res.json();
+    const weight = data.weightLbs != null ? Number(data.weightLbs) : weightToSave;
+    await proceedToApp(username, weight);
+    showMessage(els.createMessage, '');
+  } catch (err) {
+    console.error(err);
+    showMessage(els.createMessage, 'Could not create your account right now. Please try again.', true);
+  }
+}
+
 async function ensureUser(){
   if (!state.user) return;
-  const weightLbs = Number(els.weightLbs?.value || localStorage.getItem('pushups.weightLbs') || '') || undefined;
+  let weightLbs = Number(state.weightLbs || 0);
+  if (!weightLbs || !Number.isFinite(weightLbs)) {
+    const keyed = state.user ? localStorage.getItem(`pushups.weightLbs.${state.user}`) : null;
+    if (keyed != null) {
+      const stored = Number(keyed);
+      if (stored > 0) weightLbs = stored;
+    }
+  }
+  const payload = { username: state.user };
+  if (weightLbs && Number.isFinite(weightLbs) && weightLbs > 0) {
+    payload.weightLbs = Math.round(weightLbs);
+  }
   await fetch('/api/users', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ username: state.user, weightLbs })
+    body: JSON.stringify(payload)
   });
 }
 
@@ -151,16 +281,20 @@ async function refreshHistory(){
 }
 
 function showView(which){
-  if (which === 'login') { els.loginView.classList.remove('hidden'); els.appView.classList.add('hidden'); }
-  if (which === 'app') { els.appView.classList.remove('hidden'); els.loginView.classList.add('hidden'); }
+  if (which === 'login') {
+    els.loginView.classList.remove('hidden');
+    els.appView.classList.add('hidden');
+    clearAuthMessages();
+    showAuthTab('login');
+  }
+  if (which === 'app') {
+    els.appView.classList.remove('hidden');
+    els.loginView.classList.add('hidden');
+  }
 }
 
-async function proceedToApp(u){
-  setUser(u);
-  const w = Number(els.weightLbs.value||'');
-  if (w > 0) {
-    localStorage.setItem('pushups.weightLbs', String(Math.round(w)));
-  }
+async function proceedToApp(u, weight){
+  setUser(u, weight);
   await ensureUser();
   await refreshLeaderboard();
   await updateMyTotals();
@@ -179,31 +313,64 @@ function bind(){
     els.quickBtns.appendChild(b);
   });
 
-  // Login events
-  els.useUser.addEventListener('click', async ()=>{
-    const u = els.username.value.trim();
-    if (!u) return;
-    await proceedToApp(u);
-  });
-  els.username.addEventListener('keydown', async (e)=>{
-    if (e.key === 'Enter') {
-      const u = els.username.value.trim();
-      if (!u) return;
-      await proceedToApp(u);
-    }
-  });
+  // Auth events
+  if (els.loginSubmit) {
+    els.loginSubmit.addEventListener('click', () => { attemptLogin(); });
+  }
+  if (els.loginUsername) {
+    els.loginUsername.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        attemptLogin();
+      }
+    });
+  }
+  if (els.createSubmit) {
+    els.createSubmit.addEventListener('click', () => { attemptCreate(); });
+  }
+  if (els.createUsername) {
+    els.createUsername.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        attemptCreate();
+      }
+    });
+  }
+  if (els.createWeight) {
+    els.createWeight.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        attemptCreate();
+      }
+    });
+  }
+  if (els.loginTab) {
+    els.loginTab.addEventListener('click', ()=>{
+      clearAuthMessages();
+      showAuthTab('login');
+    });
+  }
+  if (els.createTab) {
+    els.createTab.addEventListener('click', ()=>{
+      clearAuthMessages();
+      showAuthTab('create');
+    });
+  }
 
   // Logout
   els.logoutBtn.addEventListener('click', ()=>{
     localStorage.removeItem('pushups.username');
     state.user = '';
+    state.weightLbs = null;
     els.appCurrentUser.textContent = '';
     els.myToday.textContent = '0';
     els.myAllTime.textContent = '0';
     els.chartUser.textContent = '(choose a user)';
     if (state.chart) { state.chart.destroy(); state.chart = null; }
+    if (els.loginUsername) els.loginUsername.value = '';
+    if (els.createUsername) els.createUsername.value = '';
+    if (els.createWeight) els.createWeight.value = '';
     showView('login');
-    els.username.focus();
   });
 
   // App events
@@ -222,9 +389,22 @@ async function init(){
   bind();
   // Always start on login screen; prefill saved username if any
   const saved = localStorage.getItem('pushups.username') || '';
-  if (saved) els.username.value = saved;
-  const savedW = localStorage.getItem('pushups.weightLbs') || '';
-  if (savedW) els.weightLbs.value = savedW;
+  if (saved) {
+    if (els.loginUsername) els.loginUsername.value = saved;
+    if (els.createUsername) els.createUsername.value = saved;
+  }
+  let savedW = '';
+  if (saved) {
+    savedW = localStorage.getItem(`pushups.weightLbs.${saved}`) || '';
+  }
+  if (!savedW) {
+    savedW = localStorage.getItem('pushups.weightLbs') || '';
+  }
+  if (savedW) {
+    const numeric = Number(savedW);
+    state.weightLbs = Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+    if (els.createWeight) els.createWeight.value = savedW;
+  }
   showView('login');
   // Poll leaderboard only when in app; keep it running after first enter
   setInterval(()=>{
