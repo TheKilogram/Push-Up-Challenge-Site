@@ -1,0 +1,4 @@
+node_modules/
+data/pushups.db
+.DS_Store
+*.log

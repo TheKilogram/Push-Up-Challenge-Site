@@ -1,4 +1,5 @@
 import http from 'http';
+import Database from 'better-sqlite3';
 import { promises as fsp } from 'fs';
 import fs from 'fs';
 import path from 'path';
@@ -10,29 +11,115 @@ const __dirname = path.dirname(__filename);
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
-const DB_PATH = path.join(DATA_DIR, 'db.json');
+const LEGACY_JSON_PATH = path.join(DATA_DIR, 'db.json');
+const SQLITE_PATH = path.join(DATA_DIR, 'pushups.db');
 const DEFAULT_WEIGHT_LBS = 180;
 
-// Ensure data folder and db file exist
-async function ensureDb() {
+let db;
+let statements = {};
+
+async function initDatabase() {
+  await fsp.mkdir(DATA_DIR, { recursive: true });
+  db = new Database(SQLITE_PATH);
+  db.pragma('journal_mode = WAL');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      username TEXT PRIMARY KEY,
+      weight_lbs INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      count INTEGER NOT NULL,
+      timestamp INTEGER NOT NULL,
+      FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_entries_user_time ON entries (username, timestamp);
+  `);
+  prepareStatements();
+  await migrateLegacyJson();
+}
+
+function prepareStatements() {
+  statements = {
+    insertUser: db.prepare('INSERT OR IGNORE INTO users (username, weight_lbs, created_at) VALUES (?, ?, ?)'),
+    updateWeight: db.prepare('UPDATE users SET weight_lbs = ? WHERE username = ?'),
+    touchCreatedAt: db.prepare('UPDATE users SET created_at = ? WHERE username = ? AND (created_at IS NULL OR created_at <= 0)'),
+    selectUser: db.prepare('SELECT username, weight_lbs, created_at FROM users WHERE username = ?'),
+    selectUserCount: db.prepare('SELECT COUNT(*) AS count FROM users'),
+    selectEntryCount: db.prepare('SELECT COUNT(*) AS count FROM entries'),
+    insertEntry: db.prepare('INSERT INTO entries (username, count, timestamp) VALUES (?, ?, ?)'),
+    selectTotals: db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN timestamp BETWEEN ? AND ? THEN count ELSE 0 END), 0) AS today,
+        COALESCE(SUM(count), 0) AS allTime
+      FROM entries
+      WHERE username = ?
+    `),
+    selectLastEntry: db.prepare('SELECT id, count, timestamp FROM entries WHERE username = ? ORDER BY timestamp DESC, id DESC LIMIT 1'),
+    deleteEntryById: db.prepare('DELETE FROM entries WHERE id = ?'),
+    selectLeaderboard: db.prepare(`
+      SELECT
+        u.username AS user,
+        COALESCE(SUM(CASE WHEN e.timestamp BETWEEN ? AND ? THEN e.count ELSE 0 END), 0) AS today,
+        COALESCE(SUM(e.count), 0) AS allTime,
+        u.weight_lbs AS weight
+      FROM users u
+      LEFT JOIN entries e ON e.username = u.username
+      GROUP BY u.username
+      ORDER BY today DESC, u.username ASC
+    `),
+    selectEntriesFrom: db.prepare('SELECT timestamp, count FROM entries WHERE username = ? AND timestamp >= ? ORDER BY timestamp ASC')
+  };
+}
+
+async function migrateLegacyJson() {
+  if (!fs.existsSync(LEGACY_JSON_PATH)) return;
+  const userCount = statements.selectUserCount.get().count;
+  const entryCount = statements.selectEntryCount.get().count;
+  if (userCount > 0 || entryCount > 0) return;
+  let raw;
   try {
-    await fsp.mkdir(DATA_DIR, { recursive: true });
-  } catch {}
-  try {
-    await fsp.access(DB_PATH);
+    raw = await fsp.readFile(LEGACY_JSON_PATH, 'utf8');
   } catch {
-    const initial = { users: {}, entries: [] };
-    await fsp.writeFile(DB_PATH, JSON.stringify(initial, null, 2), 'utf8');
+    return;
   }
-}
-
-async function loadDb() {
-  const raw = await fsp.readFile(DB_PATH, 'utf8');
-  return JSON.parse(raw || '{"users":{},"entries":[]}');
-}
-
-async function saveDb(db) {
-  await fsp.writeFile(DB_PATH, JSON.stringify(db, null, 2), 'utf8');
+  if (!raw.trim()) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.warn('Unable to parse legacy db.json:', err);
+    return;
+  }
+  const users = parsed?.users ?? {};
+  const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
+  const insertUser = db.prepare('INSERT OR IGNORE INTO users (username, weight_lbs, created_at) VALUES (?, ?, ?)');
+  const insertEntry = db.prepare('INSERT INTO entries (username, count, timestamp) VALUES (?, ?, ?)');
+  const updateWeight = db.prepare('UPDATE users SET weight_lbs = ? WHERE username = ?');
+  const tx = db.transaction(() => {
+    for (const [key, value] of Object.entries(users)) {
+      const username = String(key || '').trim().toLowerCase();
+      if (!username) continue;
+      const weight = value?.weightLbs != null ? Math.round(Number(value.weightLbs)) : null;
+      const createdAt = Number(value?.createdAt || Date.now());
+      insertUser.run(username, weight, createdAt);
+      if (weight != null) updateWeight.run(weight, username);
+    }
+    for (const entry of entries) {
+      if (!entry) continue;
+      const username = String(entry.user || '').trim().toLowerCase();
+      if (!username) continue;
+      const count = Math.floor(Number(entry.count || 0));
+      const timestamp = Number(entry.timestamp || Date.now());
+      if (!Number.isFinite(count) || count <= 0) continue;
+      insertUser.run(username, null, timestamp);
+      insertEntry.run(username, count, timestamp);
+    }
+  });
+  tx();
+  console.log('Migrated legacy JSON data into SQLite.');
 }
 
 function dayKey(ts = Date.now()) {
@@ -41,6 +128,169 @@ function dayKey(ts = Date.now()) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+function hourKey(ts) {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  return { key: `${y}-${m}-${day} ${h}:00`, label: `${m}/${day} ${h}:00` };
+}
+
+function monthKey(ts) {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  return { key: `${y}-${m}`, label: `${y}-${m}` };
+}
+
+function startOfToday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function startOfHourRange(hours) {
+  const end = new Date();
+  end.setMinutes(0, 0, 0);
+  return { start: end.getTime() - (hours - 1) * 60 * 60 * 1000, end: end.getTime() };
+}
+
+function startOfMonthRange(months) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
+  return start.getTime();
+}
+
+function ensureUserRecord(username) {
+  const now = Date.now();
+  statements.insertUser.run(username, null, now);
+  statements.touchCreatedAt.run(now, username);
+}
+
+function updateWeightIfProvided(username, weightLbsVal) {
+  if (weightLbsVal && Number.isFinite(weightLbsVal) && weightLbsVal > 0) {
+    statements.updateWeight.run(Math.round(weightLbsVal), username);
+  }
+}
+
+function getUser(username) {
+  return statements.selectUser.get(username);
+}
+
+function getUserTotals(username) {
+  const start = startOfToday();
+  const end = start + 24 * 60 * 60 * 1000 - 1;
+  const row = statements.selectTotals.get(start, end, username) || {};
+  return {
+    today: row.today ?? 0,
+    allTime: row.allTime ?? 0,
+  };
+}
+
+function calcCalories(pushups, weightLbs) {
+  return Math.round(pushups * 0.0019 * weightLbs * 10) / 10;
+}
+
+function computeHistory(username, days = 7) {
+  const map = new Map();
+  const end = new Date();
+  end.setHours(0, 0, 0, 0);
+  for (let i = 0; i < days; i++) {
+    const d = new Date(end);
+    d.setDate(end.getDate() - (days - 1 - i));
+    const key = dayKey(d.getTime());
+    map.set(key, 0);
+  }
+  const start = new Date(end);
+  start.setDate(end.getDate() - (days - 1));
+  const rows = statements.selectEntriesFrom.all(username, start.getTime());
+  for (const row of rows) {
+    const key = dayKey(row.timestamp);
+    if (map.has(key)) {
+      map.set(key, map.get(key) + row.count);
+    }
+  }
+  return Array.from(map.entries()).map(([date, total]) => ({ date, label: date, total }));
+}
+
+function computeHistoryByHour(username, hours = 24) {
+  const { start, end } = startOfHourRange(hours);
+  const buckets = new Map();
+  const endDate = new Date(end);
+  for (let i = hours - 1; i >= 0; i--) {
+    const d = new Date(endDate);
+    d.setHours(endDate.getHours() - i);
+    const { key, label } = hourKey(d.getTime());
+    buckets.set(key, { label, total: 0 });
+  }
+  const rows = statements.selectEntriesFrom.all(username, start);
+  for (const row of rows) {
+    const { key } = hourKey(row.timestamp);
+    if (buckets.has(key)) {
+      buckets.get(key).total += row.count;
+    }
+  }
+  return Array.from(buckets.entries()).map(([key, value]) => ({ date: key, label: value.label, total: value.total }));
+}
+
+function computeHistoryByMonth(username, months = 12) {
+  const start = startOfMonthRange(months);
+  const buckets = new Map();
+  const now = new Date();
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const { key, label } = monthKey(d.getTime());
+    buckets.set(key, { label, total: 0 });
+  }
+  const rows = statements.selectEntriesFrom.all(username, start);
+  for (const row of rows) {
+    const { key } = monthKey(row.timestamp);
+    if (buckets.has(key)) {
+      buckets.get(key).total += row.count;
+    }
+  }
+  return Array.from(buckets.entries()).map(([key, value]) => ({ date: key, label: value.label, total: value.total }));
+}
+
+function getLeaderboardRows() {
+  const start = startOfToday();
+  const end = start + 24 * 60 * 60 * 1000 - 1;
+  const rows = statements.selectLeaderboard.all(start, end);
+  return rows.map(row => {
+    const today = row.today ?? 0;
+    const allTime = row.allTime ?? 0;
+    const weight = row.weight != null ? row.weight : DEFAULT_WEIGHT_LBS;
+    return {
+      user: row.user,
+      today,
+      allTime,
+      todayCalories: calcCalories(today, weight),
+      allTimeCalories: calcCalories(allTime, weight),
+    };
+  });
+}
+
+async function serveStatic(req, res) {
+  let reqPath = decodeURIComponent(new URL(req.url, `http://${req.headers.host}`).pathname);
+  if (reqPath === '/') reqPath = '/index.html';
+  const safePath = path.normalize(reqPath).replace(/^([/\\])+/, '');
+  const filePath = path.join(PUBLIC_DIR, safePath);
+  if (!filePath.startsWith(PUBLIC_DIR)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return true;
+  }
+  try {
+    const data = await fsp.readFile(filePath);
+    res.writeHead(200, { 'Content-Type': getContentType(filePath) });
+    res.end(data);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function getContentType(filePath) {
@@ -55,24 +305,6 @@ function getContentType(filePath) {
     case '.jpeg': return 'image/jpeg';
     case '.svg': return 'image/svg+xml';
     default: return 'application/octet-stream';
-  }
-}
-
-async function serveStatic(req, res) {
-  let reqPath = decodeURIComponent(new URL(req.url, `http://${req.headers.host}`).pathname);
-  if (reqPath === '/') reqPath = '/index.html';
-  const safePath = path.normalize(reqPath).replace(/^([/\\])+/, '');
-  const filePath = path.join(PUBLIC_DIR, safePath);
-  if (!filePath.startsWith(PUBLIC_DIR)) {
-    res.writeHead(403); res.end('Forbidden'); return true;
-  }
-  try {
-    const data = await fsp.readFile(filePath);
-    res.writeHead(200, { 'Content-Type': getContentType(filePath) });
-    res.end(data);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -98,96 +330,6 @@ async function parseJsonBody(req) {
   });
 }
 
-function computeTotals(db) {
-  const today = dayKey();
-  const todayTotals = {};
-  const allTotals = {};
-  for (const e of db.entries) {
-    const d = dayKey(e.timestamp);
-    allTotals[e.user] = (allTotals[e.user] || 0) + e.count;
-    if (d === today) {
-      todayTotals[e.user] = (todayTotals[e.user] || 0) + e.count;
-    }
-  }
-  return { todayTotals, allTotals };
-}
-
-function computeHistory(db, username, days = 7) {
-  const map = new Map();
-  const now = new Date();
-  for (let i = 0; i < days; i++) {
-    const d = new Date(now);
-    d.setDate(now.getDate() - (days - 1 - i));
-    const key = dayKey(d.getTime());
-    map.set(key, 0);
-  }
-  for (const e of db.entries) {
-    if (e.user !== username) continue;
-    const key = dayKey(e.timestamp);
-    if (map.has(key)) map.set(key, map.get(key) + e.count);
-  }
-  return Array.from(map.entries()).map(([date, total]) => ({ date, label: date, total }));
-}
-
-function hourKey(ts) {
-  const d = new Date(ts);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const h = String(d.getHours()).padStart(2, '0');
-  return { key: `${y}-${m}-${day} ${h}:00`, label: `${m}/${day} ${h}:00` };
-}
-
-function monthKey(ts) {
-  const d = new Date(ts);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  return { key: `${y}-${m}`, label: `${y}-${m}` };
-}
-
-function computeHistoryByHour(db, username, hours = 24) {
-  const buckets = new Map();
-  const now = new Date();
-  const end = new Date(now);
-  end.setMinutes(0, 0, 0); // floor to hour
-  for (let i = hours - 1; i >= 0; i--) {
-    const d = new Date(end);
-    d.setHours(end.getHours() - i);
-    const { key, label } = hourKey(d.getTime());
-    buckets.set(key, { label, total: 0 });
-  }
-  for (const e of db.entries) {
-    if (e.user !== username) continue;
-    const { key } = hourKey(e.timestamp);
-    if (buckets.has(key)) {
-      const obj = buckets.get(key);
-      obj.total += e.count;
-    }
-  }
-  return Array.from(buckets.entries()).map(([key, v]) => ({ date: key, label: v.label, total: v.total }));
-}
-
-function computeHistoryByMonth(db, username, months = 12) {
-  const buckets = new Map();
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1);
-  for (let i = months - 1; i >= 0; i--) {
-    const d = new Date(start);
-    d.setMonth(start.getMonth() - i);
-    const { key, label } = monthKey(d.getTime());
-    buckets.set(key, { label, total: 0 });
-  }
-  for (const e of db.entries) {
-    if (e.user !== username) continue;
-    const { key } = monthKey(e.timestamp);
-    if (buckets.has(key)) {
-      const obj = buckets.get(key);
-      obj.total += e.count;
-    }
-  }
-  return Array.from(buckets.entries()).map(([key, v]) => ({ date: key, label: v.label, total: v.total }));
-}
-
 async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
@@ -195,10 +337,9 @@ async function handleApi(req, res) {
     if (req.method === 'GET' && pathname === '/api/users') {
       const username = String(url.searchParams.get('username') || '').trim().toLowerCase();
       if (!username) { res.writeHead(400); res.end(JSON.stringify({ error: 'username required' })); return; }
-      const db = await loadDb();
-      const user = db.users[username] || null;
+      const user = getUser(username);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ exists: !!user, user: user ? { username, weightLbs: user.weightLbs ?? null, createdAt: user.createdAt ?? null } : null }));
+      res.end(JSON.stringify({ exists: !!user, user: user ? { username, weightLbs: user.weight_lbs ?? null, createdAt: user.created_at ?? null } : null }));
       return;
     }
 
@@ -209,23 +350,19 @@ async function handleApi(req, res) {
       const weightLbsVal = weightLbsRaw !== null ? Number(weightLbsRaw) : null;
       const createOnly = Boolean(body.createOnly);
       if (!username) { res.writeHead(400); res.end(JSON.stringify({ error: 'username required' })); return; }
-      const db = await loadDb();
-      if (!db.users[username]) {
-        db.users[username] = { createdAt: Date.now() };
-      } else if (createOnly) {
+      const existing = getUser(username);
+      if (existing && createOnly) {
         res.writeHead(409, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'username already exists' }));
         return;
       }
-      if (!db.users[username].createdAt) {
-        db.users[username].createdAt = Date.now();
-      }
-      if (weightLbsVal && Number.isFinite(weightLbsVal) && weightLbsVal > 0) {
-        db.users[username].weightLbs = Math.round(weightLbsVal);
-      }
-      await saveDb(db);
+      const now = Date.now();
+      statements.insertUser.run(username, weightLbsVal && Number.isFinite(weightLbsVal) && weightLbsVal > 0 ? Math.round(weightLbsVal) : null, now);
+      statements.touchCreatedAt.run(now, username);
+      updateWeightIfProvided(username, weightLbsVal);
+      const user = getUser(username);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, user: username, weightLbs: db.users[username].weightLbs || null }));
+      res.end(JSON.stringify({ ok: true, user: username, weightLbs: user?.weight_lbs ?? null }));
       return;
     }
 
@@ -236,18 +373,16 @@ async function handleApi(req, res) {
       if (!username || !Number.isFinite(count) || count <= 0) {
         res.writeHead(400); res.end(JSON.stringify({ error: 'username and positive count required' })); return;
       }
-      const db = await loadDb();
-      if (!db.users[username]) {
-        db.users[username] = { createdAt: Date.now() };
-      }
-      db.entries.push({ user: username, count: Math.floor(count), timestamp: Date.now() });
-      await saveDb(db);
-      const { todayTotals, allTotals } = computeTotals(db);
-      const weight = (db.users[username] && db.users[username].weightLbs) || DEFAULT_WEIGHT_LBS;
-      const calsToday = Math.round((todayTotals[username] || 0) * 0.0019 * weight * 10) / 10;
-      const calsAll = Math.round((allTotals[username] || 0) * 0.0019 * weight * 10) / 10;
+      ensureUserRecord(username);
+      const now = Date.now();
+      statements.insertEntry.run(username, Math.floor(count), now);
+      const totals = getUserTotals(username);
+      const user = getUser(username);
+      const weight = user?.weight_lbs ?? DEFAULT_WEIGHT_LBS;
+      const calsToday = calcCalories(totals.today, weight);
+      const calsAll = calcCalories(totals.allTime, weight);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, today: todayTotals[username] || 0, allTime: allTotals[username] || 0, todayCalories: calsToday, allTimeCalories: calsAll }));
+      res.end(JSON.stringify({ ok: true, today: totals.today, allTime: totals.allTime, todayCalories: calsToday, allTimeCalories: calsAll }));
       return;
     }
 
@@ -255,43 +390,27 @@ async function handleApi(req, res) {
       const body = await parseJsonBody(req);
       const username = String(body.username || '').trim().toLowerCase();
       if (!username) { res.writeHead(400); res.end(JSON.stringify({ error: 'username required' })); return; }
-      const db = await loadDb();
-      // Find last entry for this user
-      let idx = -1;
-      for (let i = db.entries.length - 1; i >= 0; i--) {
-        if (db.entries[i].user === username) { idx = i; break; }
-      }
-      if (idx === -1) {
+      const last = statements.selectLastEntry.get(username);
+      if (!last) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'nothing to undo' }));
         return;
       }
-      const removed = db.entries.splice(idx, 1)[0];
-      await saveDb(db);
-      const { todayTotals, allTotals } = computeTotals(db);
-      const weight = (db.users[username] && db.users[username].weightLbs) || DEFAULT_WEIGHT_LBS;
-      const calsToday = Math.round((todayTotals[username] || 0) * 0.0019 * weight * 10) / 10;
-      const calsAll = Math.round((allTotals[username] || 0) * 0.0019 * weight * 10) / 10;
+      statements.deleteEntryById.run(last.id);
+      const totals = getUserTotals(username);
+      const user = getUser(username);
+      const weight = user?.weight_lbs ?? DEFAULT_WEIGHT_LBS;
+      const calsToday = calcCalories(totals.today, weight);
+      const calsAll = calcCalories(totals.allTime, weight);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, undone: removed.count, today: todayTotals[username] || 0, allTime: allTotals[username] || 0, todayCalories: calsToday, allTimeCalories: calsAll }));
+      res.end(JSON.stringify({ ok: true, undone: last.count, today: totals.today, allTime: totals.allTime, todayCalories: calsToday, allTimeCalories: calsAll }));
       return;
     }
 
     if (req.method === 'GET' && pathname === '/api/leaderboard') {
-      const db = await loadDb();
-      const { todayTotals, allTotals } = computeTotals(db);
-      const users = Object.keys(db.users).sort();
-      const rows = users.map(u => {
-        const today = todayTotals[u] || 0;
-        const allTime = allTotals[u] || 0;
-        const weight = (db.users[u] && db.users[u].weightLbs) || DEFAULT_WEIGHT_LBS;
-        const todayCalories = Math.round(today * 0.0019 * weight * 10) / 10;
-        const allTimeCalories = Math.round(allTime * 0.0019 * weight * 10) / 10;
-        return { user: u, today, allTime, todayCalories, allTimeCalories };
-      })
-        .sort((a, b) => b.today - a.today || a.user.localeCompare(b.user));
+      const leaderboard = getLeaderboardRows();
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ updatedAt: Date.now(), leaderboard: rows }));
+      res.end(JSON.stringify({ updatedAt: Date.now(), leaderboard }));
       return;
     }
 
@@ -299,22 +418,21 @@ async function handleApi(req, res) {
       const username = String(url.searchParams.get('username') || '').trim().toLowerCase();
       const mode = String(url.searchParams.get('mode') || 'day');
       if (!username) { res.writeHead(400); res.end(JSON.stringify({ error: 'username required' })); return; }
-      const db = await loadDb();
       if (mode === 'hour') {
         const hours = Math.min(72, Math.max(1, Number(url.searchParams.get('hours') || 12)));
-        const data = computeHistoryByHour(db, username, hours);
+        const data = computeHistoryByHour(username, hours);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ user: username, mode, hours, data }));
         return;
       } else if (mode === 'month') {
         const months = Math.min(24, Math.max(1, Number(url.searchParams.get('months') || 12)));
-        const data = computeHistoryByMonth(db, username, months);
+        const data = computeHistoryByMonth(username, months);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ user: username, mode, months, data }));
         return;
       } else {
         const days = Math.min(30, Math.max(1, Number(url.searchParams.get('days') || 7)));
-        const data = computeHistory(db, username, days);
+        const data = computeHistory(username, days);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ user: username, mode: 'day', days, data }));
         return;
@@ -324,13 +442,14 @@ async function handleApi(req, res) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not Found' }));
   } catch (e) {
+    console.error('API error', e);
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Server error', message: String(e.message || e) }));
   }
 }
 
 async function start() {
-  await ensureDb();
+  await initDatabase();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname.startsWith('/api/')) {

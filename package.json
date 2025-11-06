@@ -15,5 +15,7 @@
   ],
   "author": "",
   "license": "UNLICENSED",
-  "dependencies": {}
+  "dependencies": {
+    "better-sqlite3": "^12.4.1"
+  }
 }
