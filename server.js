@@ -461,8 +461,8 @@ async function start() {
       res.end('Not Found');
     }
   });
-  server.listen(PORT, () => {
-    console.log(`Push-up challenge server running at http://localhost:${PORT}`);
+  server.listen(PORT, '127.0.0.1',() => {
+    console.log(`Push-up challenge server running at http://127.0.0.1:${PORT}`);
   });
 }
 
